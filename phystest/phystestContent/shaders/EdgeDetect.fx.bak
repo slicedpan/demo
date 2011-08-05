@@ -1,0 +1,241 @@
+float4x4 World;
+float4x4 View;
+float4x4 Projection;
+
+float invScreenHeight;
+float invScreenWidth;
+float mix;
+
+const float MASKLEFT = 1.0f;
+const float MASKTOPLEFT = 2.0f;
+const float MASKTOP = 4.0f;
+
+texture inputtexture;
+sampler inputSampler = sampler_state
+{
+	Texture = <inputtexture>;
+	MAGFILTER = LINEAR;
+	MINFILTER = LINEAR;
+	MIPFILTER = POINT;
+	AddressU = Wrap;
+	AddressV = Wrap;
+};
+
+texture depth;
+sampler depthSampler = sampler_state
+{
+	Texture = (depth);
+	MAGFILTER = POINT;
+	MINFILTER = POINT;
+	MIPFILTER = NONE;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+texture normal;
+sampler normalSampler = sampler_state
+{
+	texture = (normal);
+	MAGFILTER = POINT;
+	MINFILTER = POINT;
+	MIPFILTER = NONE;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+float3 SmoothPixel(float2 curCoord, bool vertical)
+{
+	float2 offset;
+	if (vertical)
+	{
+		offset = float2(0, invScreenHeight);
+	}
+	else
+	{
+		offset = float2(invScreenWidth, 0);
+	}
+
+	float3 avg = tex2D(inputSampler, curCoord + offset).rgb * 0.1109;
+	avg += tex2D(inputSampler, curCoord - offset).rgb * 0.1109;
+
+	avg += tex2D(inputSampler, curCoord + (2 * offset)).rgb * 0.0133;	
+	avg += tex2D(inputSampler, curCoord - (2 * offset)).rgb * 0.0133;
+
+	avg += tex2D(inputSampler, curCoord - (3 * offset)).rgb * 0.0003;
+	avg += tex2D(inputSampler, curCoord + (3 * offset)).rgb * 0.0003;
+
+	return avg;
+}
+
+struct VertexShaderParams
+{
+    float4 Position : POSITION0;
+	float2 TexCoord : TEXCOORD0;
+};
+
+struct PixelShaderOut
+{
+	float4 Color : COLOR0;
+};
+
+VertexShaderParams VertexShaderFunction(VertexShaderParams input)
+{
+	return input;
+}
+
+PixelShaderOut EdgeDetectPS(VertexShaderParams input) : COLOR0
+{
+	PixelShaderOut output;
+	float mask = 0;
+    float4 base = tex2D(inputSampler, input.TexCoord);
+	float curdepth = tex2D(depthSampler, input.TexCoord);	
+	float ldepth = tex2D(depthSampler, input.TexCoord + float2(-invScreenWidth, 0));
+	float tldepth = tex2D(depthSampler, input.TexCoord + float2(-invScreenWidth, invScreenHeight));
+	float tdepth = tex2D(depthSampler, input.TexCoord + float2(0, -invScreenHeight));
+		
+	output.Color.rgb = base.rgb;	
+
+	if (abs(curdepth - ldepth) > 0.00015)
+	{		
+		mask += MASKLEFT;
+	}
+
+	if (abs(curdepth - tldepth) > 0.00015)
+	{
+		mask += MASKTOPLEFT;
+	}
+
+	if (abs(curdepth - tdepth) > 0.00015)
+	{
+		mask += MASKTOP;
+	}
+
+	output.Color.a = mask;
+
+    return output;
+}
+
+PixelShaderOut EdgeBlur1PS(VertexShaderParams input)
+{
+	PixelShaderOut output;
+
+	output.Color = tex2D(inputSampler, input.TexCoord);
+
+	int mask = (int)output.Color.a; 
+
+	if (mask > 0)
+	{
+		float brightness = length(output.Color.rgb);
+		if (mask == 1)
+		{
+			output.Color.rgb = 0.5f * output.Color.rgb + 0.5f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, 0));
+		}
+		else if(mask == 2)
+		{
+			output.Color.rgb = 0.5f * output.Color.rgb + 0.5f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, invScreenHeight));
+		}
+		else if(mask == 3)
+		{
+			output.Color.rgb = 0.3333f * output.Color.rgb + 0.3333f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, 0)); 
+			output.Color.rgb += 0.3333f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, invScreenHeight));
+		}
+		else if(mask == 4)
+		{
+			output.Color.rgb = 0.5f * output.Color.rgb + 0.5f * tex2D(inputSampler, input.TexCoord + float2(0, invScreenHeight));	
+		}
+		else if (mask == 5)
+		{
+			output.Color.rgb = 0.3333f * output.Color.rgb + 0.33333f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, 0));
+			output.Color.rgb += 0.3333f * tex2D(inputSampler, input.TexCoord + float2(0, invScreenHeight));	
+		}
+		else if (mask == 6)
+		{
+			output.Color.rgb = 0.3333f * output.Color.rgb + 0.33333f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, invScreenHeight));
+			output.Color.rgb += 0.33333f * tex2D(inputSampler, input.TexCoord + float2(0, invScreenHeight));	
+		}
+		else if (mask == 7)
+		{
+			output.Color.rgb = 0.25f * output.Color.rgb + 0.25f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, 0));
+			output.Color.rgb += 0.25f * tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, invScreenHeight));
+			output.Color.rgb += 0.25f * tex2D(inputSampler, input.TexCoord + float2(0, invScreenHeight));	
+		}
+		output.Color.rgb *= brightness / length(output.Color.rgb);
+	}
+	return output;
+}
+
+PixelShaderOut EdgeBlur2PS(VertexShaderParams input)
+{
+	PixelShaderOut output;
+
+	output.Color = tex2D(inputSampler, input.TexCoord);
+	
+	int mask = (int)tex2D(inputSampler, input.TexCoord + float2(-invScreenWidth, invScreenHeight)).a;
+
+	if (mask > 0)
+	{
+		float brightness = length(output.Color.rgb);
+		if (mask == 1)
+		{
+			output.Color.rgb = 0.5f * output.Color.rgb + 0.5f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, 0));
+		}
+		else if(mask == 2)
+		{
+			output.Color.rgb = 0.5f * output.Color.rgb + 0.5f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, -invScreenHeight));
+		}
+		else if(mask == 3)
+		{
+			output.Color.rgb = 0.3333f * output.Color.rgb + 0.3333f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, 0)); 
+			output.Color.rgb += 0.3333f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, -invScreenHeight));
+		}
+		else if(mask == 4)
+		{
+			output.Color.rgb = 0.5f * output.Color.rgb + 0.5f * tex2D(inputSampler, input.TexCoord + float2(0, -invScreenHeight));	
+		}
+		else if (mask == 5)
+		{
+			output.Color.rgb = 0.3333f * output.Color.rgb + 0.33333f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, 0));
+			output.Color.rgb += 0.3333f * tex2D(inputSampler, input.TexCoord + float2(0, -invScreenHeight));	
+		}
+		else if (mask == 6)
+		{
+			output.Color.rgb = 0.3333f * output.Color.rgb + 0.33333f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, -invScreenHeight));
+			output.Color.rgb += 0.33333f * tex2D(inputSampler, input.TexCoord + float2(0, -invScreenHeight));	
+		}
+		else if (mask == 7)
+		{
+			output.Color.rgb = 0.25f * output.Color.rgb + 0.25f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, 0));
+			output.Color.rgb += 0.25f * tex2D(inputSampler, input.TexCoord + float2(invScreenWidth, -invScreenHeight));
+			output.Color.rgb += 0.25f * tex2D(inputSampler, input.TexCoord + float2(0, -invScreenHeight));	
+		}
+		output.Color.rgb *= brightness / length(output.Color.rgb);
+	}
+
+	return output;
+}
+
+technique EdgeDetect
+{
+    pass Pass1
+    {
+        // TODO: set renderstates here.
+
+        VertexShader = compile vs_2_0 VertexShaderFunction();
+        PixelShader = compile ps_2_0 EdgeDetectPS();
+    }
+}
+
+technique EdgeBlur
+{
+	pass Pass1
+	{
+		VertexShader= compile vs_2_0 VertexShaderFunction();
+		PixelShader = compile ps_2_0 EdgeBlur1PS();
+	}
+	pass Pass2
+	{
+		VertexShader = compile vs_2_0 VertexShaderFunction();
+		PixelShader = compile ps_2_0 EdgeBlur2PS();
+	}
+}
+
